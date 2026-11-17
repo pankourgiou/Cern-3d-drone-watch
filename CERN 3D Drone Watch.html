@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CERN · 3D Drone Watch</title>
+<style>
+:root{--bg:#f4f1ea;--ink:#1d2a33;--dim:#9aa5ab;--acc:#c2410c;--card:#ebe7dd;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d1419;--ink:#d7e6ee;--dim:#3d5260;--acc:#ffb454;--card:#131d24;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0d1419;--ink:#d7e6ee;--dim:#3d5260;--acc:#ffb454;--card:#131d24;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 ui-monospace,Menlo,Consolas,monospace;padding:12px}
+header{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between;margin-bottom:8px}
+h1{font-size:17px;margin:0;font-weight:500;letter-spacing:.14em}
+button{background:none;border:1px solid var(--ink);color:var(--ink);font:inherit;padding:3px 10px;cursor:pointer;border-radius:2px}
+button.on{background:var(--ink);color:var(--bg)}
+#tp b{color:var(--acc);font-size:16px}
+#v{position:relative;border:1px solid var(--ink);overflow:hidden;background:var(--bg);min-height:300px}
+#v canvas{display:block;width:100%}
+.lb{position:absolute;left:0;top:0;font-size:10px;letter-spacing:.1em;color:var(--ink);white-space:nowrap;pointer-events:none;opacity:.8}
+#hud{position:absolute;left:12px;top:10px;pointer-events:none;font-size:12px;text-shadow:0 0 4px var(--bg),0 0 4px var(--bg)}
+#hud i{display:inline-block;width:10px;height:7px;margin-right:4px;background:var(--dim)}
+#hud i.b{background:var(--acc)}
+#fc{position:absolute;left:12px;bottom:10px;color:var(--acc);pointer-events:none;text-shadow:0 0 4px var(--bg)}
+.hint{color:var(--ink);opacity:.65;margin:8px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+.card{border:1px solid var(--dim);background:var(--card);padding:7px 9px;cursor:pointer;transition:border-color .2s,transform .2s;user-select:none}
+.card.f{border-color:var(--acc);transform:translateY(-2px)}
+.card.l{outline:2px solid var(--acc)}
+.card h3{margin:0;font-size:11px;letter-spacing:.14em;font-weight:500;color:var(--acc)}
+.card code{opacity:.6;font-size:11px}
+.card .v{margin-top:3px;min-height:3.6em}
+#tl{display:flex;align-items:center;gap:6px;font-size:12px}#tl i{width:14px;height:14px;border-radius:50%;border:1px solid var(--ink);display:block}
+#tl.r i.r{background:#d62828;border-color:#d62828}#tl.g i.g{background:#2a9d5c;border-color:#2a9d5c}#tl.r #tm{color:#d62828}
+</style></head><body>
+<header><h1>CERN · 3D DRONE WATCH</h1>
+<div id="tp">tempo <b id="bv">70</b> BPM <small>(50–105)</small> <button id="snd">sound off</button></div><div id="tl" class="g" aria-live="polite"><i class="r"></i><i class="g"></i><span id="tm"></span></div></header>
+<div id="v"><div id="hud"></div><div id="fc"></div></div>
+<p class="hint">Hover or tap a calculation: the drone flies to the part of CERN it belongs to, that part lights up, and the tempo follows (50–105 BPM). Tap again to lock. Switching is limited to one card per beat, never faster than 105 BPM: switch too fast and the light turns red until you slow down, then green again. Left alone, the run cycles forever: injection, ramp, stable beams, dump, recovery, then a new fill and a new search.</p>
+<div id="cards" class="grid"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $=s=>document.querySelector(s),wrap=$('#v');
+let bpm=70,bt=0,last=0,focus=-1,lock=-1,ph=0,pb=0,cyc=0,fr=0,snd=false,ac=null;
+const PH=[['INJECTION',16,58],['RAMP',24,76],['STABLE BEAMS',56,92],['BEAM DUMP',14,105],['CRYO RECOVERY',20,52]];
+const TOP=[['H → γγ',125.25,1],['Z → μμ',91.19,0],['W → eν',80.38,0],['top pair → ℓℓ',172.5,0],['J/ψ → μμ',3.097,0],['Υ(1S) → μμ',9.46,0]];
+const TB=[84,66,105,98,72,90,52,100,60];
+const CARDS=[['BEAM ENERGY','γ = E / m_p c²'],['DIPOLE FIELD','B = p / (0.2998 ρ)'],['LUMINOSITY','L = n_b N² f / 4π σx σy'],['PILE-UP','μ = L σ / (n_b f_rev)'],['INVARIANT MASS','m² = 2E₁E₂(1 − cosθ)'],['SIGNIFICANCE','Z = √2[(s+b)ln(1+s/b) − s]'],['CRYOGENICS','T(He II) ≈ 1.9 K'],['TRIGGER','40 MHz → L1 100 kHz → HLT'],['STORED BEAM','U = n_b N E']];
+$('#cards').innerHTML=CARDS.map((c,i)=>`<div class="card"><h3>${c[0]}</h3><code>${c[1]}</code><div class="v"></div></div>`).join('');
+const cards=[...document.querySelectorAll('.card')];
+let lastAtt=-1e9,lt='g',pending=-1;
+function gate(){const n=performance.now(),ok=n-lastAtt>=60000/Math.min(bpm,105);lastAtt=n;lt=ok?'g':'r';return ok}
+cards.forEach((c,i)=>{c.onpointerenter=e=>{if(e.pointerType=='mouse'&&focus!=i){if(gate())focus=i;else pending=i}};c.onpointerleave=e=>{if(e.pointerType=='mouse'){pending=-1;focus=lock}};c.onclick=()=>{if(lock==i){lock=-1;focus=-1}else if(gate()){lock=i;focus=i}}});
+$('#snd').onclick=e=>{snd=!snd;e.target.textContent='sound '+(snd?'on':'off');e.target.classList.toggle('on',snd);if(snd&&!ac)ac=new(window.AudioContext||window.webkitAudioContext)()};
+function tick(n){if(!snd||!ac)return;const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=(n%4?200:300)+(bpm-50)*3;g.gain.setValueAtTime(.07,ac.currentTime);g.gain.exponentialRampToValueAtTime(.0001,ac.currentTime+.16);o.connect(g);g.connect(ac.destination);o.start();o.stop(ac.currentTime+.17)}
+const lcg=s=>()=>(s=(s*16807)%2147483647)/2147483647;
+function state(){const u=pb/PH[ph][1],S={u},E=[.45,.45+6.35*u*u*(3-2*u),6.8,6.8-6.35*u*u,.45][ph];S.E=E;
+ S.L=ph==2?2.1e34*Math.exp(-u*.5):0;S.g=E*1e12/938.272e6;S.B=E*1000/(0.2998*2803.95);S.I=1.4225*S.B;
+ S.mu=S.L*8e-26/(2748*11245.5);S.rate=S.L*8e-26;S.U=2748*1.15e11*E*1.602e-7/1e6;S.hlt=1200*S.L/2.1e34;
+ S.s=ph==2?450*Math.sqrt(u):ph==3?450*(1-u):0;S.Z=S.s>0?Math.sqrt(2*((S.s+3000)*Math.log(1+S.s/3000)-S.s)):0;
+ S.T=1.9+(ph==4?.6*(1-u):0)+(ph==3?.3*u:0)+.01*Math.sin(bt*2);
+ const tp=TOP[cyc%TOP.length],M=tp[1];S.tp=tp;S.E1=M*.9*(1+.25*Math.sin(bt*1.3));S.E2=M*.8*(1+.25*Math.cos(bt*1.1));
+ S.m=M*(1+.003*(Math.sin(bt*5.7)+Math.cos(bt*2.3)));S.th=Math.acos(Math.max(-1,Math.min(1,1-S.m*S.m/(2*S.E1*S.E2))))*57.2958;return S}
+const f2=(v,d=2)=>v.toFixed(d),ex=v=>v.toExponential(2);
+const vals=S=>[`E = ${f2(S.E)} TeV<br>γ = ${S.g.toFixed(0)} · f_rev 11245.5 Hz`,`B = ${f2(S.B)} T<br>I ≈ ${f2(S.I)} kA`,`L = ${ex(S.L)} cm⁻²s⁻¹<br>rate = ${ex(S.rate)} /s`,`μ = ${S.mu.toFixed(1)} per crossing<br>2748 bunches`,`m = ${f2(S.m)} GeV (${S.tp[0]})<br>E₁ ${f2(S.E1,1)} · E₂ ${f2(S.E2,1)} · θ ${f2(S.th,1)}°`,`Z = ${f2(S.Z)} σ ${S.Z>=5?'· DISCOVERY LEVEL':''}<br>s = ${S.s.toFixed(0)}, b = 3000`,`T = ${f2(S.T,3)} K<br>${S.T<2.17?'superfluid He II':'above λ-point (2.17 K)'}`,`HLT out ≈ ${f2(S.hlt)} kHz<br>L1 accept 100 kHz`,`U = ${S.U.toFixed(0)} MJ<br>≈ ${(S.U/4.184).toFixed(0)} kg TNT per beam`];
+
+// ---------- 3D ----------
+let ren,sc,cam,V3,mats={},G={};
+function build(){
+ V3=(a,b,c)=>new THREE.Vector3(a,b,c);
+ ren=new THREE.WebGLRenderer({antialias:true});ren.setPixelRatio(Math.min(devicePixelRatio||1,2));wrap.prepend(ren.domElement);
+ sc=new THREE.Scene();sc.fog=new THREE.Fog(0xffffff,90,420);cam=new THREE.PerspectiveCamera(58,16/9,.5,900);
+ ['dim','ring','dip','det','room','acc','trk'].forEach(k=>mats[k]=new THREE.LineBasicMaterial({color:0}));mats.beam=new THREE.PointsMaterial({size:1.7});
+ const ed=(geo,m,th=20)=>new THREE.LineSegments(new THREE.EdgesGeometry(geo,th),m),Rg=(r,y,m)=>{const p=[];for(let i=0;i<128;i++)p.push(V3(r*Math.cos(i/128*6.2832),y,r*Math.sin(i/128*6.2832)));return new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(p),m)};
+ const ln=(m,...a)=>new THREE.Line(new THREE.BufferGeometry().setFromPoints(a),m);
+ let gp=[];for(let i=-260;i<=260;i+=20){gp.push(V3(i,0,-260),V3(i,0,260),V3(-260,0,i),V3(260,0,i))}sc.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(gp),mats.dim));
+ const mp=[];for(let i=-300;i<300;i+=40){const h=12+((i*37)%29+29)%29*1.6,h2=12+(((i+40)*37)%29+29)%29*1.6;mp.push(V3(i,h,-230),V3(i+40,h2,-230))}sc.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(mp),mats.dim));
+ sc.add(Rg(60,-8,mats.ring),Rg(58.4,-8,mats.ring));
+ for(let i=0;i<36;i++){const a=i/36*6.2832,g=new THREE.Group(),c=ed(new THREE.CylinderGeometry(.9,.9,5,8),mats.dip);c.rotation.x=1.5708;g.add(c);g.position.set(60*Math.cos(a),-8,60*Math.sin(a));g.rotation.y=-a;sc.add(g)}
+ const det=(s)=>{const g=new THREE.Group();[2.5,4.5,6.5,8.5].forEach((r,i)=>{const c=ed(new THREE.CylinderGeometry(r,r,8+i*2.2,24),mats.det,10);c.rotation.x=1.5708;g.add(c)});g.scale.setScalar(s);return g};
+ G.atlas=det(1);G.atlas.position.set(60,-8,0);sc.add(G.atlas);[[-60,0,.7],[0,60,.5],[0,-60,.5]].forEach(q=>{const d=det(q[2]);d.position.set(q[0],-8,q[1]);d.rotation.y=q[0]?0:1.5708;sc.add(d)});
+ G.flash=ed(new THREE.IcosahedronGeometry(1,1),mats.acc);G.atlas.add(G.flash);
+ const tg=new THREE.BufferGeometry();tg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(42*24*6),3));G.trk=tg;G.atlas.add(new THREE.LineSegments(tg,mats.trk));
+ const sg=new THREE.BufferGeometry();sg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(2*24*6),3));G.spc=sg;G.atlas.add(new THREE.LineSegments(sg,mats.acc));
+ // beams
+ [0,1].forEach(j=>{const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(120),3));G['b'+j]=g;const p=new THREE.Points(g,mats.beam);p.frustumCulled=false;sc.add(p)});
+ // control room
+ const rm=new THREE.Group();rm.position.set(95,0,20);sc.add(rm);G.room=rm;
+ rm.add(ed(new THREE.BoxGeometry(28,9,18),mats.room));rm.children[0].position.y=4.5;
+ G.wf=[];for(let i=0;i<5;i++){const x=-10+i*5,d=ed(new THREE.BoxGeometry(3.4,.25,1.6),mats.room);d.position.set(x,1.3,2);rm.add(d);const m=ed(new THREE.BoxGeometry(2.2,1.4,.1),mats.room);m.position.set(x,2.3,2);rm.add(m);
+  const gw=new THREE.BufferGeometry();gw.setAttribute('position',new THREE.BufferAttribute(new Float32Array(24*3),3));const w=new THREE.Line(gw,mats.room);w.position.set(x,2.3,2.1);rm.add(w);G.wf.push(gw)}
+ const sci=()=>{const g=new THREE.Group(),h=ed(new THREE.IcosahedronGeometry(.5,1),mats.room);h.position.y=3.1;g.add(h);g.add(ln(mats.room,V3(0,2.6,0),V3(0,1.4,0)),ln(mats.room,V3(0,1.4,0),V3(-.4,0,0)),ln(mats.room,V3(0,1.4,0),V3(.4,0,0)));
+  g.arms=[-1,1].map(s=>{const p=new THREE.Group();p.position.set(s*.1,2.4,0);p.add(ln(mats.room,V3(0,0,0),V3(s*.5,-.9,-.5)));g.add(p);return p});return g};
+ G.sci=[];[-10,-5,0,5,10].forEach(x=>{const s=sci();s.position.set(x,0,4);rm.add(s);G.sci.push(s)});[-9,9].forEach(x=>{const s=sci();s.position.set(x,0,-5);rm.add(s);G.sci.push(s)});
+ const sf=ed(new THREE.BoxGeometry(14,6,.2),mats.room);sf.position.set(0,5.2,-8.9);rm.add(sf);
+ const ms=new THREE.Group();ms.position.set(0,5.2,-8.6);ms.scale.setScalar(.34);rm.add(ms);[1,2.4,4.2,5.6].forEach(r=>{const p=[];for(let i=0;i<48;i++)p.push(V3(r*Math.cos(i/48*6.2832),r*Math.sin(i/48*6.2832),0));ms.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(p),mats.room))});
+ const mt=new THREE.LineSegments(tg,mats.trk);ms.add(mt);const mq=new THREE.LineSegments(sg,mats.acc);ms.add(mq);
+ sc.add(ln(mats.dim,V3(60,-8,0),V3(60,0,0),V3(95,0,20)));
+ const pk=new THREE.BufferGeometry();pk.setAttribute('position',new THREE.BufferAttribute(new Float32Array(3),3));G.pk=pk;const pp=new THREE.Points(pk,new THREE.PointsMaterial({size:2.4,color:0}));mats.pk=pp.material;sc.add(pp);
+ G.lb=[['ATLAS',60,-1,0],['CMS',-60,-1,0],['ALICE',0,-1,60],['LHCb',0,-1,-60],['CONTROL ROOM',95,11,20],['JURA',0,40,-230],['LHC DIPOLES',-42,-4,42]].map(q=>{const d=document.createElement('div');d.className='lb';d.textContent=q[0];wrap.appendChild(d);return{d,p:V3(q[1],q[2],q[3])}});
+ rs();
+}
+function rs(){const w=wrap.clientWidth,h=Math.round(w*(innerWidth<700?1.0:.5625));ren.setSize(w,h);cam.aspect=w/h;cam.updateProjectionMatrix()}
+addEventListener('resize',()=>{if(ren)rs()});
+function genEvent(seed,nt,B){const r=lcg(seed),a=G.trk.attributes.position.array;let k=0;
+ const trk=(arr,off,len,kk,segs)=>{let th=Math.acos(2*r()-1),p=r()*6.283,d=V3(Math.sin(th)*Math.cos(p),Math.sin(th)*Math.sin(p),Math.cos(th)),q=V3(0,0,0),st=len/segs,n=0;
+  for(let s=0;s<segs;s++){arr[off+n++]=q.x;arr[off+n++]=q.y;arr[off+n++]=q.z;q.addScaledVector(d,st);const c=Math.cos(kk*st),sn=Math.sin(kk*st),dx=d.x*c-d.y*sn;d.y=d.x*sn+d.y*c;d.x=dx;arr[off+n++]=q.x;arr[off+n++]=q.y;arr[off+n++]=q.z}return n};
+ for(let i=0;i<nt;i++)k+=trk(a,k,2+r()*5.5,(r()<.5?-1:1)*B*.012/(.3+r()),12);
+ G.trk.setDrawRange(0,k/3);G.trk.attributes.position.needsUpdate=true;
+ const b=G.spc.attributes.position.array;let m=0;for(let i=0;i<2;i++)m+=trk(b,m,9.5,TOP[cyc%TOP.length][2]?0:(i?-1:1)*B*.004,24);G.spc.setDrawRange(0,m/3);G.spc.attributes.position.needsUpdate=true}
+const VIEW={ring:[[0,-6,0],185,.62],dip:[[-42,-8,42],42,.4],det:[[60,-8,0],38,.34],room:[[95,3,20],34,.3]};
+const PV=['ring','dip','det','ring','room'],FV=['ring','dip','det','det','room','room','dip','room','ring'];
+let cp={t:null,r:185,el:.6,az:.4};
+let hl={ink:'#000',acc:'#c00',dim:'#999',bg:'#fff'},lastEv=-1;
+function render(dt,t,S,pulse){
+ const cs=getComputedStyle(document.documentElement);['ink','acc','dim','bg'].forEach(k=>hl[k]=cs.getPropertyValue('--'+k).trim()||hl[k]);
+ sc.background=new THREE.Color(hl.bg);sc.fog.color.set(hl.bg);
+ const gm={ring:[0,8],dip:[1,6,8],det:[2,3],room:[4,5,7]};
+ mats.dim.color.set(hl.dim);mats.trk.color.set(hl.ink);mats.acc.color.set(hl.acc);mats.pk.color.set(hl.acc);
+ for(const k in gm)mats[k].color.set(gm[k].includes(focus)?hl.acc:hl.ink);mats.beam.color.set(focus==0||focus==8?hl.acc:hl.ink);
+ // beams
+ const sp=.12+.5*S.E/6.8,nb=ph==0?14:40;[0,1].forEach(j=>{const a=G['b'+j].attributes.position.array;for(let k=0;k<40;k++){const an=(j?-1:1)*t*sp+k*6.2832/40*(j?1:1)+j*.08,r=j?58.4:60;a[k*3]=r*Math.cos(an);a[k*3+1]=-8;a[k*3+2]=r*Math.sin(an);if(k>=nb)a[k*3+1]=-999}G['b'+j].attributes.position.needsUpdate=true});
+ G.atlas.scale.setScalar(1+.03*pulse);G.flash.visible=S.L>0;G.flash.scale.setScalar(.4+2.4*pulse);
+ const ev=Math.floor(bt);if(ev!=lastEv){lastEv=ev;genEvent(ev*97+cyc*13+5,S.L>0?Math.min(42,Math.round(5+S.mu*.4)):0,S.B);if(S.L<=0)G.spc.setDrawRange(0,0)}
+ const pa=G.pk.attributes.position.array,f=(bt*.4)%1;pa[0]=f<.34?60:60+(f-.34)/.66*35;pa[1]=f<.34?-8+f/.34*8:0;pa[2]=f<.34?0:(f-.34)/.66*20;G.pk.attributes.position.needsUpdate=true;
+ G.wf.forEach((g,i)=>{const a=g.attributes.position.array;for(let k=0;k<24;k++){a[k*3]=-.9+k*.078;a[k*3+1]=.45*Math.sin(k*.6+bt*3+i)*(.4+.6*(S.hlt/1.2+.2));a[k*3+2]=0}g.attributes.position.needsUpdate=true});
+ const up=S.Z>=5;G.sci.forEach((s,i)=>{const w=Math.sin(bt*3.1416*(focus==7?2:1)+i*1.7);s.arms.forEach((a,j)=>{if(up){a.rotation.z=(j?1:-1)*(2.3+.3*w);a.rotation.x=0}else if(i>4){a.rotation.z=(j?1:-1)*(1.2+.2*w);a.rotation.x=0}else{a.rotation.z=0;a.rotation.x=.5*w*(j?1:-1)}});s.position.y=up?Math.abs(w)*.5:0});
+ // camera
+ const vn=focus>=0?FV[focus]:PV[ph],v=VIEW[vn],k=Math.min(1,dt*1.1);
+ if(!cp.t)cp.t=V3(...v[0]);cp.t.lerp(V3(...v[0]),k);cp.r+=(v[1]-cp.r)*k;cp.el+=(v[2]-cp.el)*k;cp.az+=dt*(.1+.03*Math.sin(t*.2));
+ const rr=cp.r*(1+.01*Math.sin(t*.9)),cE=Math.cos(cp.el);
+ cam.position.set(cp.t.x+rr*cE*Math.cos(cp.az),cp.t.y+rr*Math.sin(cp.el)+Math.sin(t*1.3)*.4-pulse*.3,cp.t.z+rr*cE*Math.sin(cp.az));cam.lookAt(cp.t);cam.fov=58-1.5*pulse;cam.updateProjectionMatrix();
+ ren.render(sc,cam);
+ const w=wrap.clientWidth,h=wrap.clientHeight;G.lb.forEach(l=>{const q=l.p.clone().project(cam),ok=q.z<1&&Math.abs(q.x)<1.05&&Math.abs(q.y)<1.05;l.d.style.display=ok?'block':'none';if(ok)l.d.style.transform=`translate(${(q.x*.5+.5)*w+6}px,${(-q.y*.5+.5)*h}px)`});
+ if(fr%6==0){$('#hud').innerHTML=`● REC · DRONE CAM 01 · ${vn.toUpperCase()} VIEW<br>FILL ${9021+cyc} · ${PH[ph][0]} · ${S.tp[0]}<br>${[0,1,2,3].map(i=>`<i class="${i==Math.floor(bt)%4?'b':''}"></i>`).join('')}`;$('#fc').textContent=focus>=0?`FOCUS: ${CARDS[focus][0]} → tempo ${TB[focus]} BPM${lock==focus?' (locked)':''}`:''}
+}
+function frame(now){requestAnimationFrame(frame);try{const dt=Math.max(0,Math.min(.1,(now-last)/1e3));last=now;const t=now/1e3,ob=Math.floor(bt);
+ const nxt=PH[(ph+1)%5][2],cur=PH[ph][2],u=pb/PH[ph][1],tgt=focus>=0?TB[focus]:cur+(nxt-cur)*u*u*(3-2*u);
+ bpm+=(tgt-bpm)*Math.min(1,dt*.9);bpm=Math.max(50,Math.min(105,bpm));bt+=dt*bpm/60;pb+=dt*bpm/60;
+ if(pb>=PH[ph][1]){pb=0;ph++;if(ph>4){ph=0;cyc++}}
+ {const n=performance.now(),mn=60000/Math.min(bpm,105);if(pending>=0&&n-lastAtt>=mn){focus=pending;pending=-1;lt='g'}else if(lt=='r'&&n-lastAtt>2*mn)lt='g'}
+ if(Math.floor(bt)!=ob)tick(Math.floor(bt));
+ const S=state(),pulse=Math.exp(-(bt%1)*5);render(dt,t,S,pulse);
+ if(fr++%6==0){$('#bv').textContent=bpm.toFixed(0);$('#tl').className=lt;$('#tm').textContent=lt=='g'?'GREEN · pace OK':'RED · slow down, one switch per beat ('+Math.round(Math.min(bpm,105))+'/min max)';const v=vals(S);cards.forEach((c,i)=>{c.querySelector('.v').innerHTML=v[i];c.classList.toggle('f',focus==i);c.classList.toggle('l',lock==i)})}
+ }catch(e){console.error(e)}}
+try{if(typeof THREE=='undefined')throw 0;build();requestAnimationFrame(frame)}catch(e){wrap.insertAdjacentHTML('beforeend','<p style="padding:20px">3D could not start (WebGL or the three.js library did not load).</p>');console.error(e)}
+</script></body></html>
